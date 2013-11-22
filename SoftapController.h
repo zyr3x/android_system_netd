@@ -28,6 +28,8 @@
 #define AP_CHANNEL_DEFAULT	6
 
 class SoftapController {
+    char mBuf[SOFTAP_MAX_BUFFER_SIZE];
+    char mIface[IFNAMSIZ];
     pid_t mPid;
     int mSock;
 
@@ -37,6 +39,8 @@ public:
     SoftapController();
     virtual ~SoftapController();
 
+    int startDriver(char *iface);
+    int stopDriver(char *iface);
     int startSoftap();
     int stopSoftap();
     bool isSoftapStarted();
