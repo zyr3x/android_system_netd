@@ -38,7 +38,6 @@
 #include <netutils/ifc.h>
 #include <private/android_filesystem_config.h>
 #include "wifi.h"
-#include "ResponseCode.h"
 
 #include "SoftapController.h"
 
@@ -47,110 +46,125 @@
 #endif
 
 static const char HOSTAPD_CONF_FILE[]    = "/data/misc/wifi/hostapd.conf";
-static const char HOSTAPD_BIN_FILE[]    = "/system/bin/hostapd";
 
-SoftapController::SoftapController()
-    : mPid(0) {}
+SoftapController::SoftapController() {
+    mPid = 0;
+    mSock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (mSock < 0)
+        ALOGE("Failed to open socket");
+}
 
 SoftapController::~SoftapController() {
+    if (mSock >= 0)
+        close(mSock);
 }
 
 int SoftapController::startSoftap() {
     pid_t pid = 1;
+    int ret = 0;
 
     if (mPid) {
-        ALOGE("SoftAP is already running");
-        return ResponseCode::SoftapStatusResult;
+        ALOGE("Softap already started");
+        return 0;
+    }
+    if (mSock < 0) {
+        ALOGE("Softap startap - failed to open socket");
+        return -1;
     }
 
     if ((pid = fork()) < 0) {
         ALOGE("fork failed (%s)", strerror(errno));
-        return ResponseCode::ServiceStartFailed;
+        return -1;
     }
 
     if (!pid) {
         ensure_entropy_file_exists();
-        if (execl(HOSTAPD_BIN_FILE, HOSTAPD_BIN_FILE,
+        if (execl("/system/bin/hostapd", "/system/bin/hostapd",
                   "-e", WIFI_ENTROPY_FILE,
                   HOSTAPD_CONF_FILE, (char *) NULL)) {
             ALOGE("execl failed (%s)", strerror(errno));
         }
-        ALOGE("SoftAP failed to start");
-        return ResponseCode::ServiceStartFailed;
+        ALOGE("Should never get here!");
+        return -1;
     } else {
         mPid = pid;
-        ALOGD("SoftAP started successfully");
+        ALOGD("Softap startap - Ok");
         usleep(AP_BSS_START_DELAY);
     }
-    return ResponseCode::SoftapStatusResult;
+    return ret;
+
 }
 
 int SoftapController::stopSoftap() {
 
     if (mPid == 0) {
-        ALOGE("SoftAP is not running");
-        return ResponseCode::SoftapStatusResult;
+        ALOGE("Softap already stopped");
+        return 0;
     }
 
-    ALOGD("Stopping the SoftAP service...");
+    ALOGD("Stopping Softap service");
     kill(mPid, SIGTERM);
     waitpid(mPid, NULL, 0);
 
+    if (mSock < 0) {
+        ALOGE("Softap stopap - failed to open socket");
+        return -1;
+    }
     mPid = 0;
-    ALOGD("SoftAP stopped successfully");
+    ALOGD("Softap service stopped");
     usleep(AP_BSS_STOP_DELAY);
-    return ResponseCode::SoftapStatusResult;
+    return 0;
 }
 
 bool SoftapController::isSoftapStarted() {
-    return (mPid != 0);
+    return (mPid != 0 ? true : false);
 }
 
 /*
  * Arguments:
- *  argv[2] - wlan interface
- *  argv[3] - SSID
- *  argv[4] - Broadcast/Hidden
- *  argv[5] - Channel
- *  argv[6] - Security
- *  argv[7] - Key
+ *      argv[2] - wlan interface
+ *      argv[3] - SSID
+ *	argv[4] - Security
+ *	argv[5] - Key
+ *	argv[6] - Channel
+ *	argv[7] - Preamble
+ *	argv[8] - Max SCB
  */
 int SoftapController::setSoftap(int argc, char *argv[]) {
     char psk_str[2*SHA256_DIGEST_LENGTH+1];
-    int ret = ResponseCode::SoftapStatusResult;
-    int i = 0;
-    int fd;
-    int hidden = 0;
-    int channel = AP_CHANNEL_DEFAULT;
+    int ret = 0, i = 0, fd;
+    char *ssid, *iface;
+
+    if (mSock < 0) {
+        ALOGE("Softap set - failed to open socket");
+        return -1;
+    }
+    if (argc < 4) {
+        ALOGE("Softap set - missing arguments");
+        return -1;
+    }
+
+    iface = argv[2];
+
     char *wbuf = NULL;
     char *fbuf = NULL;
 
-    if (argc < 5) {
-        ALOGE("Softap set is missing arguments. Please use:");
-        ALOGE("softap <wlan iface> <SSID> <hidden/broadcast> <channel> <wpa2?-psk|open> <passphrase>");
-        return ResponseCode::CommandSyntaxError;
+    if (argc > 3) {
+        ssid = argv[3];
+    } else {
+        ssid = (char *)"AndroidAP";
     }
 
-    if (!strcasecmp(argv[4], "hidden"))
-        hidden = 1;
+    asprintf(&wbuf, "interface=%s\ndriver=nl80211\nctrl_interface="
+            "/data/misc/wifi/hostapd\nssid=%s\nchannel=6\nieee80211n=1\n",
+            iface, ssid);
 
-    if (argc >= 5) {
-        channel = atoi(argv[5]);
-        if (channel <= 0)
-            channel = AP_CHANNEL_DEFAULT;
-    }
-
-    asprintf(&wbuf, "interface=%s\ndriver=" HOSTAPD_DRIVER_NAME "\nctrl_interface="
-            "/data/misc/wifi/hostapd\nssid=%s\nchannel=%d\nieee80211n=1\n"
-            "hw_mode=g\nignore_broadcast_ssid=%d\n",
-            argv[2], argv[3], channel, hidden);
-
-    if (argc > 7) {
-        if (!strcmp(argv[6], "wpa-psk")) {
-            generatePsk(argv[3], argv[7], psk_str);
+    if (argc > 4) {
+        if (!strcmp(argv[4], "wpa-psk")) {
+            generatePsk(ssid, argv[5], psk_str);
             asprintf(&fbuf, "%swpa=1\nwpa_pairwise=TKIP CCMP\nwpa_psk=%s\n", wbuf, psk_str);
-        } else if (!strcmp(argv[6], "wpa2-psk")) {
-            generatePsk(argv[3], argv[7], psk_str);
+        } else if (!strcmp(argv[4], "wpa2-psk")) {
+            generatePsk(ssid, argv[5], psk_str);
             asprintf(&fbuf, "%swpa=2\nrsn_pairwise=CCMP\nwpa_psk=%s\n", wbuf, psk_str);
         } else if (!strcmp(argv[6], "open")) {
             asprintf(&fbuf, "%s", wbuf);
@@ -168,11 +182,11 @@ int SoftapController::setSoftap(int argc, char *argv[]) {
         ALOGE("Cannot update \"%s\": %s", HOSTAPD_CONF_FILE, strerror(errno));
         free(wbuf);
         free(fbuf);
-        return ResponseCode::OperationFailed;
+        return -1;
     }
     if (write(fd, fbuf, strlen(fbuf)) < 0) {
         ALOGE("Cannot write to \"%s\": %s", HOSTAPD_CONF_FILE, strerror(errno));
-        ret = ResponseCode::OperationFailed;
+        ret = -1;
     }
     free(wbuf);
     free(fbuf);
@@ -183,7 +197,7 @@ int SoftapController::setSoftap(int argc, char *argv[]) {
                 HOSTAPD_CONF_FILE, strerror(errno));
         close(fd);
         unlink(HOSTAPD_CONF_FILE);
-        return ResponseCode::OperationFailed;
+        return -1;
     }
 
     if (fchown(fd, AID_SYSTEM, AID_WIFI) < 0) {
@@ -191,45 +205,11 @@ int SoftapController::setSoftap(int argc, char *argv[]) {
                 HOSTAPD_CONF_FILE, AID_WIFI, strerror(errno));
         close(fd);
         unlink(HOSTAPD_CONF_FILE);
-        return ResponseCode::OperationFailed;
+        return -1;
     }
 
     close(fd);
     return ret;
-}
-
-/*
- * Arguments:
- *	argv[2] - interface name
- *	argv[3] - AP or P2P or STA
- */
-int SoftapController::fwReloadSoftap(int argc, char *argv[])
-{
-    int i = 0;
-    char *fwpath = NULL;
-
-    if (argc < 4) {
-        ALOGE("SoftAP fwreload is missing arguments. Please use: softap <wlan iface> <AP|P2P|STA>");
-        return ResponseCode::CommandSyntaxError;
-    }
-
-    if (strcmp(argv[3], "AP") == 0) {
-        fwpath = (char *)wifi_get_fw_path(WIFI_GET_FW_PATH_AP);
-    } else if (strcmp(argv[3], "P2P") == 0) {
-        fwpath = (char *)wifi_get_fw_path(WIFI_GET_FW_PATH_P2P);
-    } else if (strcmp(argv[3], "STA") == 0) {
-        fwpath = (char *)wifi_get_fw_path(WIFI_GET_FW_PATH_STA);
-    }
-    if (!fwpath)
-        return ResponseCode::CommandParameterError;
-    if (wifi_change_fw_path((const char *)fwpath)) {
-        ALOGE("Softap fwReload failed");
-        return ResponseCode::OperationFailed;
-    }
-    else {
-        ALOGD("Softap fwReload - Ok");
-    }
-    return ResponseCode::SoftapStatusResult;
 }
 
 void SoftapController::generatePsk(char *ssid, char *passphrase, char *psk_str) {
@@ -240,6 +220,55 @@ void SoftapController::generatePsk(char *ssid, char *passphrase, char *psk_str) 
             reinterpret_cast<const unsigned char *>(ssid), strlen(ssid),
             4096, SHA256_DIGEST_LENGTH, psk);
     for (j=0; j < SHA256_DIGEST_LENGTH; j++) {
-        sprintf(&psk_str[j*2], "%02x", psk[j]);
+        sprintf(&psk_str[j<<1], "%02x", psk[j]);
     }
+    psk_str[j<<1] = '\0';
+}
+
+
+/*
+ * Arguments:
+ *	argv[2] - interface name
+ *	argv[3] - AP or STA
+ */
+int SoftapController::fwReloadSoftap(int argc, char *argv[])
+{
+    int ret, i = 0;
+    char *iface;
+    char *fwpath;
+
+    if (mSock < 0) {
+        ALOGE("Softap fwrealod - failed to open socket");
+        return -1;
+    }
+    if (argc < 4) {
+        ALOGE("Softap fwreload - missing arguments");
+        return -1;
+    }
+
+    iface = argv[2];
+
+    if (strcmp(argv[3], "AP") == 0) {
+        fwpath = (char *)wifi_get_fw_path(WIFI_GET_FW_PATH_AP);
+    } else if (strcmp(argv[3], "P2P") == 0) {
+        fwpath = (char *)wifi_get_fw_path(WIFI_GET_FW_PATH_P2P);
+    } else {
+        fwpath = (char *)wifi_get_fw_path(WIFI_GET_FW_PATH_STA);
+    }
+    if (!fwpath)
+        return -1;
+    ret = wifi_change_fw_path((const char *)fwpath);
+    if (ret) {
+        ALOGE("Softap fwReload - failed: %d", ret);
+    }
+    else {
+        ALOGD("Softap fwReload - Ok");
+    }
+    return ret;
+}
+
+int SoftapController::clientsSoftap(char **retbuf)
+{
+    /* TODO: implement over hostapd */
+    return 0;
 }
