@@ -37,6 +37,7 @@
 #include "SecondaryTableController.h"
 
 const char* SecondaryTableController::LOCAL_MANGLE_OUTPUT = "st_mangle_OUTPUT";
+const char* SecondaryTableController::LOCAL_MANGLE_POSTROUTING = "st_mangle_POSTROUTING";
 const char* SecondaryTableController::LOCAL_MANGLE_EXEMPT = "st_mangle_EXEMPT";
 const char* SecondaryTableController::LOCAL_MANGLE_IFACE_FORMAT = "st_mangle_%s_OUTPUT";
 const char* SecondaryTableController::LOCAL_NAT_POSTROUTING = "st_nat_POSTROUTING";
@@ -270,6 +271,14 @@ int SecondaryTableController::modifyFromRule(int tableIndex, const char *action,
 int SecondaryTableController::modifyLocalRoute(int tableIndex, const char *action,
         const char *iface, const char *addr) {
     char tableIndex_str[11];
+    char action_local[IPARGSIZ];
+    /* append ensures that routes are successfully added for
+    the same address but with different interface names */
+    if ( strcmp( action, ADD ) == 0 ) {
+      strncpy(action_local, APPEND, strlen(APPEND)+1);
+    } else {
+      strncpy(action_local, action, IPARGSIZ);
+    }
 
     if (verifyTableIndex(tableIndex)) {
         return -1;
@@ -282,7 +291,7 @@ int SecondaryTableController::modifyLocalRoute(int tableIndex, const char *actio
     const char *cmd[] = {
             IP_PATH,
             "route",
-            action,
+            action_local,
             addr,
             "dev",
             iface,
@@ -422,6 +431,18 @@ int SecondaryTableController::setFwmarkRule(const char *iface, bool add) {
                 "0",
                 NULL);
 
+        /* Best effort, because some kernels might not have the needed TCPMSS */
+        execIptables(V4V6,
+                "-t",
+                "mangle",
+                "-A",
+                LOCAL_MANGLE_POSTROUTING,
+                "-p", "tcp", "-o", iface, "--tcp-flags", "SYN,RST", "SYN",
+                "-j",
+                "TCPMSS",
+                "--clamp-mss-to-pmtu",
+                NULL);
+
     } else {
         ret = execIptables(V4V6,
                 "-t",
@@ -449,6 +470,18 @@ int SecondaryTableController::setFwmarkRule(const char *iface, bool add) {
                 "mangle",
                 "-X",
                 chain_str,
+                NULL);
+
+        /* Best effort, because some kernels might not have the needed TCPMSS */
+        execIptables(V4V6,
+                "-t",
+                "mangle",
+                "-D",
+                LOCAL_MANGLE_POSTROUTING,
+                "-p", "tcp", "-o", iface, "--tcp-flags", "SYN,RST", "SYN",
+                "-j",
+                "TCPMSS",
+                "--clamp-mss-to-pmtu",
                 NULL);
     }
 

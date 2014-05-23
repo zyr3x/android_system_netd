@@ -27,6 +27,10 @@
 #define IFNAMSIZ 16
 #endif
 
+#ifndef IPARGSIZ
+#define IPARGSIZ 20
+#endif
+
 static const unsigned int MAX_IFACE_LENGTH = 15;
 static const int INTERFACES_TRACKED = 10;
 static const int BASE_TABLE_NUMBER = 60;
@@ -60,6 +64,7 @@ public:
     int setupIptablesHooks();
 
     static const char* LOCAL_MANGLE_OUTPUT;
+    static const char* LOCAL_MANGLE_POSTROUTING;
     static const char* LOCAL_MANGLE_EXEMPT;
     static const char* LOCAL_MANGLE_IFACE_FORMAT;
     static const char* LOCAL_NAT_POSTROUTING;
