@@ -279,7 +279,6 @@ WARN_UNUSED_RESULT int modifyIpRule(uint16_t action, uint32_t priority, uint32_t
         ALOGE("incompatible start and end UIDs (%u vs %u)", uidStart, uidEnd);
         return -EUSERS;
     }
-    bool isUidRule = (uidStart != INVALID_UID);
 
     // Assemble a rule request and put it in an array of iovec structures.
     fib_rule_hdr rule = {
@@ -300,11 +299,7 @@ WARN_UNUSED_RESULT int modifyIpRule(uint16_t action, uint32_t priority, uint32_t
         { &FRATTR_FWMARK,    mask ? sizeof(FRATTR_FWMARK) : 0 },
         { &fwmark,           mask ? sizeof(fwmark) : 0 },
         { &FRATTR_FWMASK,    mask ? sizeof(FRATTR_FWMASK) : 0 },
-        { &mask,             mask ? sizeof(mask) : 0 },
-        { &FRATTR_UID_START, isUidRule ? sizeof(FRATTR_UID_START) : 0 },
-        { &uidStart,         isUidRule ? sizeof(uidStart) : 0 },
-        { &FRATTR_UID_END,   isUidRule ? sizeof(FRATTR_UID_END) : 0 },
-        { &uidEnd,           isUidRule ? sizeof(uidEnd) : 0 },
+        { &mask,             mask ? sizeof(mask) : 0 }, 
         { &fraIifName,       iif != IIF_NONE ? sizeof(fraIifName) : 0 },
         { iifName,           iifLength },
         { PADDING_BUFFER,    iifPadding },
