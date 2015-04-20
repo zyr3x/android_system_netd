@@ -47,13 +47,13 @@
 #include "wpa_ctrl.h"
 #endif
 
-static const char HOSTAPD_CONF_FILE[]    = "/data/misc/wifi/hostapd.conf";
-static const char HOSTAPD_BIN_FILE[]    = "/system/bin/hostapd";
 #ifdef LIBWPA_CLIENT_EXISTS
 static const char HOSTAPD_UNIX_FILE[]    = "/data/misc/wifi/hostapd/wlan0";
 static const char HOSTAPD_SOCKETS_DIR[]    = "/data/misc/wifi/sockets";
 static const char HOSTAPD_DHCP_DIR[]    = "/data/misc/dhcp";
 #endif
+static const char HOSTAPD_CONF_FILE[]    = "/data/misc/wifi/hostapd.conf";
+static const char HOSTAPD_BIN_FILE[]    = "/system/bin/hostapd";
 
 SoftapController::SoftapController(SocketListener *sl)
     : mPid(0) {
@@ -69,18 +69,23 @@ void *SoftapController::threadStart(void *obj){
     struct wpa_ctrl *ctrl;
     int count = 0;
 
-    ALOGE("SoftapController::threadStart...");
+    ALOGD("SoftapController::threadStart...");
 
-    DIR *dir=NULL;
+    DIR *dir = NULL;
 
     dir = opendir(HOSTAPD_SOCKETS_DIR);
-    if(NULL == dir){
+    if (NULL == dir && errno == ENOENT) {
         mkdir(HOSTAPD_SOCKETS_DIR, S_IRWXU|S_IRWXG|S_IRWXO);
         chown(HOSTAPD_SOCKETS_DIR, AID_WIFI, AID_WIFI);
-    }else{
-        closedir(dir);
+        chmod(HOSTAPD_SOCKETS_DIR, S_IRWXU|S_IRWXG);
+    } else {
+         if (dir != NULL) { /* Directory already exists */
+             ALOGD("%s already exists", HOSTAPD_SOCKETS_DIR);
+             closedir(dir);
+         }
+         if (errno == EACCES)
+             ALOGE("Cant open %s , check permissions ", HOSTAPD_SOCKETS_DIR);
     }
-
     chmod(HOSTAPD_DHCP_DIR, S_IRWXU|S_IRWXG|S_IRWXO);
 
     ctrl = wpa_ctrl_open(HOSTAPD_UNIX_FILE);
@@ -143,6 +148,10 @@ int SoftapController::startSoftap() {
     if (mPid) {
         ALOGE("SoftAP is already running");
         return ResponseCode::SoftapStatusResult;
+    }
+
+    if (ensure_entropy_file_exists() < 0) {
+        ALOGE("Wi-Fi entropy file was not created");
     }
 
     if ((pid = fork()) < 0) {
@@ -257,7 +266,7 @@ int SoftapController::setSoftap(int argc, char *argv[]) {
         asprintf(&fbuf, "%s", wbuf);
     }
 
-    fd = open(HOSTAPD_CONF_FILE, O_CREAT | O_TRUNC | O_WRONLY | O_NOFOLLOW, 0660);
+    fd = open(HOSTAPD_CONF_FILE, O_CREAT | O_TRUNC | O_WRONLY | O_NOFOLLOW | O_CLOEXEC, 0660);
     if (fd < 0) {
         ALOGE("Cannot update \"%s\": %s", HOSTAPD_CONF_FILE, strerror(errno));
         free(wbuf);
